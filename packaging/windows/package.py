@@ -137,7 +137,7 @@ def compile_launcher(upstream,work,payload,env):
                   f'VALUE "FileVersion", "{VERSION}"\nEND\nEND\nEND\n',encoding="ascii")
     sdk = KIT/"sdk"
     inc = sdk/"Include"/SDK
-    env = dict(env,INCLUDE=os.pathsep.join(map(str,[VC/"include",inc/"um",inc/"ucrt",inc/"shared"])),
+    env = dict(env,INCLUDE=os.pathsep.join(map(str,[VC/"include",inc/"um",inc/"ucrt",inc/"shared",inc/"winrt"])),
                LIB=os.pathsep.join(map(str,[VC/"lib/x64",sdk/"um/x64",sdk/"ucrt/x64"])))
     subprocess.run([sdk/"bin"/SDK/"x64/rc.exe","/nologo",rc.name],cwd=work,env=env,check=True)
     subprocess.run([VC/"bin/Hostx64/x64/cl.exe","/nologo","/MT","/O2","/std:c++17","/EHsc","/utf-8",
