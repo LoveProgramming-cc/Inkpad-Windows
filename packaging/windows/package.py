@@ -88,6 +88,7 @@ def stage_app(upstream, payload, env):
     source = upstream / "inkpad"
     shutil.copytree(source,app/"inkpad",ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copyfile(SOURCE/"windows_platform.py",app/"inkpad/windows_platform.py")
+    shutil.copyfile(SOURCE/"windows_drive_login.py",app/"inkpad/windows_drive_login.py")
     for stem in ("ptext","pdf","library","prefs","window"):
         path = app / "inkpad" / (stem+".py")
         text = path.read_text(encoding="utf-8")
@@ -98,6 +99,20 @@ def stage_app(upstream, payload, env):
             text = text.replace("import time\n","import time\nfrom .windows_platform import strftime\n",1)
             if "from .windows_platform import strftime" not in text:raise ValueError(stem)
             text = text.replace("time.strftime(", "strftime(")
+        if stem == "window":
+            old = """        self.toast(tr('请在浏览器中登录 Google 并授权'))
+
+        def open_url(url):
+            GLib.idle_add(lambda: Gio.AppInfo.launch_default_for_uri(url, None) and False)"""
+            for before, after in (
+                (old, "        from .windows_drive_login import WindowsDriveLogin\n        login = WindowsDriveLogin(self)"),
+                ("gdrive.authorize(open_url)", "gdrive.authorize(login.open_url)"),
+                ("        def done(error):\n            if error is not None:\n                self._error(tr('连接 Google Drive 失败')",
+                 "        def done(error):\n            login.finish()\n            if error is not None:\n                self._error(tr('连接 Google Drive 失败')"),
+            ):
+                if text.count(before) != 1:
+                    raise ValueError("Review the upstream Google Drive login integration before packaging")
+                text = text.replace(before, after)
         path.write_text(text,encoding="utf-8")
     shutil.copyfile(SOURCE/"start.py",app/"start.py")
     shutil.copyfile(upstream/"LICENSE",payload/"LICENSE")
