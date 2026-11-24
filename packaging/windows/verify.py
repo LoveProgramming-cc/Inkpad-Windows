@@ -54,13 +54,7 @@ def main():
     def verify_links():
         for link in links:
             assert link.is_file(), link
-            env["INKPAD_VERIFY_LINK"] = str(link)
-            data = json.loads(shell_query(
-                "$link=(New-Object -ComObject WScript.Shell).CreateShortcut($env:INKPAD_VERIFY_LINK);"
-                "@{target=$link.TargetPath;workdir=$link.WorkingDirectory;icon=$link.IconLocation}|ConvertTo-Json -Compress"))
-            assert Path(data["target"]).samefile(install/"Inkpad.exe"), data
-            assert Path(data["workdir"]).samefile(install), data
-            assert Path(data["icon"].rsplit(",",1)[0]).samefile(install/"Inkpad.exe"), data
+            run([manifest.parent/"check_shortcut.exe",link,install])
 
     def run(command):
         subprocess.run(command, env=env, cwd=area, check=True, timeout=360,

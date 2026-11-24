@@ -143,6 +143,9 @@ def compile_launcher(upstream,work,payload,env):
     subprocess.run([VC/"bin/Hostx64/x64/cl.exe","/nologo","/MT","/O2","/std:c++17","/EHsc","/utf-8",
                     SOURCE/"launcher.cpp","/Fe:"+str(payload/"Inkpad.exe"),"/link","/subsystem:windows",
                     "Inkpad.res","shell32.lib","user32.lib"],env=env,cwd=work,check=True)
+    subprocess.run([VC/"bin/Hostx64/x64/cl.exe","/nologo","/MT","/O2","/std:c++17","/EHsc","/utf-8",
+                    SOURCE/"check_shortcut.cpp","/Fe:check_shortcut.exe","/link","ole32.lib","uuid.lib"],
+                   env=env,cwd=work,check=True)
     return ico
 
 
