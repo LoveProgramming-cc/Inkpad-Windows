@@ -1,0 +1,3 @@
+.windows-build/
+__pycache__/
+*.pyc
