@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import winreg
 from zipfile import ZipFile
 
 
@@ -28,14 +29,48 @@ def main():
     area.mkdir()
     env = dict(os.environ,INKPAD_HOME=str(area/"profile"),
                PATH=os.pathsep.join([os.environ["SystemRoot"]+"\\System32",os.environ["SystemRoot"]]))
+    powershell = Path(os.environ["SystemRoot"])/"System32/WindowsPowerShell/v1.0/powershell.exe"
+    def shell_query(script):
+        return subprocess.check_output([powershell,"-NoProfile","-NonInteractive","-Command",
+            "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"+script],
+            env=env, cwd=area, encoding="utf-8", timeout=45, creationflags=subprocess.CREATE_NO_WINDOW).strip()
+
+    # Hosted runners use both real Windows shell folders. Local tests use private folders.
+    real_shell = os.environ.get("INKPAD_VERIFY_REAL_SHELL") == "1"
+    if real_shell:
+        key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\InkpadGNOME"
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,key):
+                raise RuntimeError("Real-shell tests require a clean Windows profile")
+        except FileNotFoundError:
+            pass
+        dirs = [Path(shell_query(f"[Environment]::GetFolderPath('{kind}','DoNotVerify')"))
+                for kind in ("DesktopDirectory","Programs")]
+    else:
+        dirs = [install/".test-shell"/kind for kind in ("Desktop","Programs")]
+    links = [d/"Inkpad.lnk" for d in dirs]
+    assert all(d.is_absolute() for d in dirs) and not any(p.exists() for p in links)
+
+    def verify_links():
+        for link in links:
+            assert link.is_file(), link
+            env["INKPAD_VERIFY_LINK"] = str(link)
+            data = json.loads(shell_query(
+                "$link=(New-Object -ComObject WScript.Shell).CreateShortcut($env:INKPAD_VERIFY_LINK);"
+                "@{target=$link.TargetPath;workdir=$link.WorkingDirectory;icon=$link.IconLocation}|ConvertTo-Json -Compress"))
+            assert Path(data["target"]).samefile(install/"Inkpad.exe"), data
+            assert Path(data["workdir"]).samefile(install), data
+            assert Path(data["icon"].rsplit(",",1)[0]).samefile(install/"Inkpad.exe"), data
 
     def run(command):
         subprocess.run(command, env=env, cwd=area, check=True, timeout=360,
                        creationflags=subprocess.CREATE_NO_WINDOW)
 
     # NSIS expects /D=... last and unquoted, including paths with spaces.
-    install_command = f'"{setup}" /S /NOREG /D={install}'
+    options = "/S" if real_shell else "/S /NOREG"
+    install_command = f'"{setup}" {options} /D={install}'
     run(install_command)
+    verify_links()
     for name, expected in hashes.items():
         with (install/name).open("rb") as src:
             assert digest(src) == expected, name
@@ -44,7 +79,9 @@ def main():
     run([install/"runtime/bin/python3.14.exe","-I","-B","-X","utf8",
          Path(__file__).with_name("smoke.py"),install/"app",note])
     saved = note.read_bytes()
+    links[0].unlink()
     run(install_command)
+    verify_links()
     assert note.read_bytes() == saved
     run([install/"Uninstall.exe","/S"])
     deadline = time.monotonic() + 120
@@ -52,6 +89,8 @@ def main():
         time.sleep(.25)
     assert [p for p in install.rglob("*") if p.is_file()] == [note]
     assert note.read_bytes() == saved
+    assert not any(p.exists() for p in links), links
+    print("Verified desktop and Start menu shortcuts, reinstall repair and uninstall removal",flush=True)
     print(f"Verified {len(hashes)} installed files and ZIP entries, formats, reinstall and uninstall",flush=True)
 
 

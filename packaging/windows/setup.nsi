@@ -24,6 +24,19 @@ VIAddVersionKey /LANG=2052 "FileDescription" "Inkpad Windows 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Inkpad contributors"
 Var registerApp
+Var desktopDir
+Var programsDir
+
+!macro ShortcutFolders
+  SetShellVarContext current
+  ${If} $registerApp == 1
+    StrCpy $desktopDir "$DESKTOP"
+    StrCpy $programsDir "$SMPROGRAMS"
+  ${Else}
+    StrCpy $desktopDir "$INSTDIR\.test-shell\Desktop"
+    StrCpy $programsDir "$INSTDIR\.test-shell\Programs"
+  ${EndIf}
+!macroend
 
 Function .onInit
   StrCpy $registerApp 1
@@ -68,6 +81,17 @@ accept:
   SetOutPath "$INSTDIR"
   File /r "${PAYLOAD}\*.*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  !insertmacro ShortcutFolders
+  ClearErrors
+  CreateDirectory "$desktopDir"
+  CreateDirectory "$programsDir"
+  CreateShortCut "$desktopDir\Inkpad.lnk" "$INSTDIR\Inkpad.exe" "" "$INSTDIR\Inkpad.exe" 0
+  CreateShortCut "$programsDir\Inkpad.lnk" "$INSTDIR\Inkpad.exe" "" "$INSTDIR\Inkpad.exe" 0
+  IfErrors 0 linksReady
+  MessageBox MB_ICONSTOP|MB_OK "无法创建 Inkpad 桌面或开始菜单快捷方式。" /SD IDOK
+  SetErrorLevel 3
+  Quit
+linksReady:
   StrCmp $registerApp 0 done
   WriteRegStr HKCU "${PRODUCTKEY}" "DisplayName" "Inkpad"
   WriteRegStr HKCU "${PRODUCTKEY}" "DisplayVersion" "${VERSION}"
@@ -78,10 +102,21 @@ done:
 SectionEnd
 
 Section "Uninstall"
-  !include "${REMOVE_FILES}"
   ReadRegStr $0 HKCU "${PRODUCTKEY}" "InstallLocation"
-  StrCmp $0 "$INSTDIR" 0 +2
-  DeleteRegKey HKCU "${PRODUCTKEY}"
+  StrCpy $registerApp 0
+  ${If} $0 == "$INSTDIR"
+    StrCpy $registerApp 1
+    DeleteRegKey HKCU "${PRODUCTKEY}"
+  ${EndIf}
+  !insertmacro ShortcutFolders
+  Delete "$desktopDir\Inkpad.lnk"
+  Delete "$programsDir\Inkpad.lnk"
+  ${If} $registerApp == 0
+    RMDir "$desktopDir"
+    RMDir "$programsDir"
+    RMDir "$INSTDIR\.test-shell"
+  ${EndIf}
+  !include "${REMOVE_FILES}"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 SectionEnd
