@@ -143,7 +143,7 @@ def main():
             uninstaller = machine/"Uninstall.exe"
             require_level(uninstaller,"requireAdministrator")
             require_level(exe,"asInvoker")
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,machine_key,0,winreg.KEY_READ|winreg.KEY_WOW64_32KEY) as key:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,machine_key,0,winreg.KEY_READ|winreg.KEY_WOW64_64KEY) as key:
                 assert Path(winreg.QueryValueEx(key,"InstallLocation")[0]) == machine
             for link in common_links:
                 run([manifest.parent/"check_shortcut.exe",link,machine])
@@ -168,7 +168,7 @@ def main():
                 time.sleep(.25)
             assert not machine.exists() and not any(link.exists() for link in common_links)
             try:
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,machine_key,0,winreg.KEY_READ|winreg.KEY_WOW64_32KEY):
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,machine_key,0,winreg.KEY_READ|winreg.KEY_WOW64_64KEY):
                     raise AssertionError("Stale machine uninstall registration")
             except FileNotFoundError:
                 pass
