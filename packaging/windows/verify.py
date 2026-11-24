@@ -1,5 +1,7 @@
 """Check the actual setup and portable payloads in a private data-drive test area."""
 import hashlib
+import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -7,6 +9,7 @@ import subprocess
 import sys
 import time
 import winreg
+from xml.etree import ElementTree
 from zipfile import ZipFile
 
 
@@ -17,7 +20,8 @@ def digest(stream):
 def main():
     release, manifest = map(Path,sys.argv[1:])
     hashes = json.loads(manifest.read_text())
-    setup, = release.glob("*-Setup.exe")
+    setup, = release.glob("*-CurrentUser-Setup.exe")
+    machine_setup, = release.glob("*-x64-Setup.exe")
     portable, = release.glob("*-Portable.zip")
     with ZipFile(portable) as z:
         assert {i.filename for i in z.infolist()} == {"Inkpad/"+n for n in hashes}
@@ -27,6 +31,14 @@ def main():
     area = manifest.parent / "tests"
     install = area / "安装 space"
     area.mkdir()
+    mt = manifest.parent.parent/"toolchain/sdk/bin/10.0.22621.0/x64/mt.exe"
+    def require_level(exe, level):
+        xml = area/"level.manifest"
+        subprocess.run([mt,"-nologo",f"-inputresource:{exe};#1",f"-out:{xml}"],check=True)
+        assert ElementTree.parse(xml).find(".//{*}requestedExecutionLevel").get("level") == level, exe
+
+    require_level(setup,"asInvoker")
+    require_level(machine_setup,"requireAdministrator")
     env = dict(os.environ,INKPAD_HOME=str(area/"profile"),
                PATH=os.pathsep.join([os.environ["SystemRoot"]+"\\System32",os.environ["SystemRoot"]]))
     powershell = Path(os.environ["SystemRoot"])/"System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -69,6 +81,8 @@ def main():
     options = "/S" if real_shell else "/S /NOREG"
     install_command = f'"{setup}" {options}' if real_shell else f'"{setup}" {options} /D={install}'
     run(install_command)
+    require_level(install/"Uninstall.exe","asInvoker")
+    require_level(install/"Inkpad.exe","asInvoker")
     verify_links()
     for name, expected in hashes.items():
         with (install/name).open("rb") as src:
@@ -115,6 +129,51 @@ def main():
     assert not any(p.exists() for p in links), links
     if real_shell:
         assert notebook.is_file()
+        machine_key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\InkpadGNOME"
+        common_links = [Path(shell_query(f"[Environment]::GetFolderPath('{kind}','DoNotVerify')"))/"Inkpad.lnk"
+                        for kind in ("CommonDesktopDirectory","CommonPrograms")]
+        for folder in ("ProgramFiles","ProgramFiles(x86)"):
+            machine = Path(os.environ[folder])/"Inkpad"
+            assert not machine.exists() and not any(p.exists() for p in common_links)
+            command = f'"{machine_setup}" /S'
+            if folder == "ProgramFiles(x86)":
+                command += f" /D={machine}"
+            run(command)
+            exe = machine/"Inkpad.exe"
+            uninstaller = machine/"Uninstall.exe"
+            require_level(uninstaller,"requireAdministrator")
+            require_level(exe,"asInvoker")
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,machine_key,0,winreg.KEY_READ|winreg.KEY_WOW64_32KEY) as key:
+                assert Path(winreg.QueryValueEx(key,"InstallLocation")[0]) == machine
+            for link in common_links:
+                run([manifest.parent/"check_shortcut.exe",link,machine])
+            # A sharing violation is distinct from a lack of administrator privileges.
+            kernel = ctypes.windll.kernel32
+            kernel.CreateFileW.argtypes = [wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,
+                                           wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+            kernel.CreateFileW.restype = wintypes.HANDLE
+            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+            handle = kernel.CreateFileW(str(exe),0x80000000,0,None,3,0x80,None)
+            assert handle != ctypes.c_void_p(-1).value
+            try:
+                for attempt in (command, f'"{uninstaller}" /S _?={machine}'):
+                    assert subprocess.run(attempt,env=env,cwd=area,timeout=120).returncode == 32
+                assert all(link.exists() for link in common_links) and uninstaller.exists()
+            finally:
+                kernel.CloseHandle(handle)
+            run(command)
+            run([uninstaller,"/S"])
+            deadline = time.monotonic()+120
+            while machine.exists() and time.monotonic()<deadline:
+                time.sleep(.25)
+            assert not machine.exists() and not any(link.exists() for link in common_links)
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,machine_key,0,winreg.KEY_READ|winreg.KEY_WOW64_32KEY):
+                    raise AssertionError("Stale machine uninstall registration")
+            except FileNotFoundError:
+                pass
+            assert notebook.is_file()
+            print(f"Verified admin install, locked-file cancellation, reinstall and admin uninstall: {machine}",flush=True)
     print("Verified desktop and Start menu shortcuts, reinstall repair and uninstall removal",flush=True)
     print(f"Verified {len(hashes)} installed files and ZIP entries, formats, reinstall and uninstall",flush=True)
 

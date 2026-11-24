@@ -34,9 +34,15 @@ def previous_data(install):
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                                 r"Software\Microsoft\Windows\CurrentVersion\Uninstall\InkpadGNOME",
                                 0, winreg.KEY_READ | winreg.KEY_WOW64_32KEY) as key:
-                old, _ = winreg.QueryValueEx(key, "LegacyDataDir")
-            if Path(old).is_absolute() and Path(old).is_dir():
-                return Path(old)
+                for name in ("LegacyDataDir", "InstallLocation"):
+                    try:
+                        old = Path(winreg.QueryValueEx(key, name)[0])
+                    except FileNotFoundError:
+                        continue
+                    if name == "InstallLocation":
+                        old = old / "InkpadData"
+                    if old.is_absolute() and old.is_dir():
+                        return old
         except FileNotFoundError:
             pass
     return None

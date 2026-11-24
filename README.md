@@ -2,7 +2,11 @@
 
 Inkpad 的 Windows 10 x64 发行版，使用原版 GTK 4 和 libadwaita 界面。下载页提供安装包、便携 ZIP 和 SHA-256 校验文件。[下载最新版本](https://github.com/LoveProgramming-cc/Inkpad-Windows/releases/latest)
 
-首次安装默认使用 `%LOCALAPPDATA%\Programs\Inkpad`，通常在 C 盘。桌面和开始菜单各有一个 **Inkpad** 快捷方式。新用户的笔记保存在 Windows 的 **文档\Inkpad** 中，包括已通过 OneDrive 或系统设置重定向的文档目录。可在应用设置里更改文稿库。设置、登录状态和运行缓存放在 `%LOCALAPPDATA%\Inkpad`。
+标准安装包 `*-x64-Setup.exe` 为所有用户安装到 `%ProgramFiles%\Inkpad`。安装、更新和卸载均向 Windows 请求管理员权限。也可在安装向导选择 `C:\Program Files (x86)\Inkpad`。Inkpad 日常运行使用普通用户权限。
+
+原先使用当前用户版的用户可用 `*-CurrentUser-Setup.exe` 原位升级。此包默认安装到 `%LOCALAPPDATA%\Programs\Inkpad`，安装和卸载均使用当前用户权限。两种安装范围分别登记在 Windows「应用和功能」中，并在对应的桌面和开始菜单创建快捷方式。
+
+新用户的笔记保存在 Windows 的 **文档\Inkpad** 中，包括已通过 OneDrive 或系统设置重定向的文档目录。可在应用设置里更改文稿库。设置、登录状态和运行缓存放在 `%LOCALAPPDATA%\Inkpad`。
 
 覆盖安装沿用已选安装位置。首次升级会沿用旧设置和已有笔记的位置。卸载移除程序与快捷方式，保留文稿库和个人设置。便携 ZIP 完整解压后双击 `Inkpad.exe`；带有旧版 `InkpadData` 的便携副本继续使用原数据。Windows 包未进行公开代码签名。
 
@@ -20,7 +24,7 @@ Inkpad 的 Windows 10 x64 发行版，使用原版 GTK 4 和 libadwaita 界面�
 .\packaging\windows\build.ps1 -WorkDir D:\InkpadBuild -Revision main
 ```
 
-脚本从上游读取版本号，编译启动器和 Python 字节码，生成 NSIS 安装包与 ZIP，逐文件校验，并在独立中文路径进行静默安装、读写笔记、PDF 和 PNG 导出与读取、Goodnotes 往返、覆盖安装及卸载测试。当前版本的三个分发文件位于 `D:\InkpadBuild\dist`。
+脚本从上游读取版本号，编译启动器和 Python 字节码，生成两种安装包、便携 ZIP 和 SHA-256 文件到 `D:\InkpadBuild\dist`。本地测试使用隔离目录；云端还会验证 EXE 的权限清单、两种 Program Files 路径的实际安装、文件占用、覆盖安装、卸载和笔记保留。
 
 ## 在 GitHub 重新发布
 

@@ -182,12 +182,14 @@ def main():
     dirs=sorted({d for p in files for d in p.parents if d!=Path(".")},key=lambda d:(-len(d.parts),str(d)))
     remove=work/"remove.nsh"
     def nsis(p):return str(p).replace("$","$$")
-    remove.write_text("\n".join([f'Delete "$INSTDIR\\{nsis(f)}"' for f in files]+
+    remove.write_text("\n".join([f'Delete "$INSTDIR\\{nsis(f)}"\nIfFileExists "$INSTDIR\\{nsis(f)}" removeFailed 0' for f in files]+
                                 [f'RMDir "$INSTDIR\\{nsis(d)}"' for d in dirs]),encoding="utf-8-sig")
     setup=release/(LABEL+"-Setup.exe");portable=release/(LABEL+"-Portable.zip")
+    user_setup=release/(LABEL+"-CurrentUser-Setup.exe")
     nsis_tool=next(DEPS.rglob("makensis.exe"))
-    subprocess.run([nsis_tool,"/V2","/INPUTCHARSET","UTF8",f"/DVERSION={VERSION}",f"/DPAYLOAD={payload}",
-                    f"/DSETUP={setup}",f"/DICON={ico}",f"/DREMOVE_FILES={remove}",SOURCE/"setup.nsi"],env=env,check=True)
+    for output, flags in ((setup, ["/DMACHINE"]), (user_setup, [])):
+        subprocess.run([nsis_tool,"/V2","/INPUTCHARSET","UTF8",*flags,f"/DVERSION={VERSION}",f"/DPAYLOAD={payload}",
+                        f"/DSETUP={output}",f"/DICON={ico}",f"/DREMOVE_FILES={remove}",SOURCE/"setup.nsi"],env=env,check=True)
     with ZipFile(portable,"w",ZIP_DEFLATED,compresslevel=6) as z:
         for p in files:z.write(payload/p,(Path("Inkpad")/p).as_posix())
     with ZipFile(portable) as z:
@@ -195,11 +197,11 @@ def main():
     manifest={str(p).replace("\\","/"):hashlib.sha256((payload/p).read_bytes()).hexdigest() for p in files}
     (work/"payload.json").write_text(json.dumps(manifest),encoding="utf-8")
     (release/"SHA256.txt").write_text("".join(hashlib.sha256(p.read_bytes()).hexdigest()+"  "+p.name+"\n"
-                                             for p in (setup,portable)),encoding="ascii")
+                                             for p in (setup,user_setup,portable)),encoding="ascii")
     subprocess.run([sys.executable, "-I", "-B", SOURCE/"verify.py", release, work/"payload.json"],env=env,check=True)
     out=WORK/"dist"
     out.mkdir(exist_ok=True)
-    for artifact in (setup,portable,release/"SHA256.txt"):
+    for artifact in (setup,user_setup,portable,release/"SHA256.txt"):
         os.replace(artifact,out/artifact.name)
     print(f"Verified Windows packages: {out}",flush=True)
 

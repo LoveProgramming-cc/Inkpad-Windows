@@ -1,6 +1,6 @@
 # Inkpad · Windows 10 x64
 
-双击 Inkpad.exe 打开文稿库。便携版先完整解压。首次安装默认使用 %LOCALAPPDATA%\Programs\Inkpad，通常在 C 盘。当前用户可在 Windows「应用和功能」中卸载。
+双击 Inkpad.exe 打开文稿库。标准安装包默认安装到 %ProgramFiles%\Inkpad，安装和卸载均由 Windows 请求管理员权限。当前用户安装包（CurrentUser-Setup.exe）默认使用 %LOCALAPPDATA%\Programs\Inkpad，适合旧版原位升级。可在 Windows「应用和功能」中卸载。便携版先完整解压。
 
 这份程序使用 当前 GNOME 项目的 Python 代码、GTK 4 和 libadwaita。包内含原生 Windows 启动器、已编译的 Python 应用字节码、可阅读的源码、Python 运行时和 Poppler。运行所需的库随包提供。
 
