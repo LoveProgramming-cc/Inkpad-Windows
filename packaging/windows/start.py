@@ -10,10 +10,13 @@ PREFIX = ROOT / "runtime"
 
 
 def configure():
-    home = Path(os.environ.get("INKPAD_HOME") or ROOT / "InkpadData").resolve()
+    sys.path.insert(0, str(APP))
+    from profile_paths import profile
+    home, library = profile(ROOT)
     home.mkdir(parents=True, exist_ok=True)
     os.environ["INKPAD_HOME"] = str(home)
-    for key in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+    os.environ["INKPAD_WINDOWS_DEFAULT_LIBRARY"] = str(library)
+    for key in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
                 "XDG_DATA_HOME", "TMP", "TEMP"):
         folder = home / "runtime" / key.lower()
         folder.mkdir(exist_ok=True, parents=True)
@@ -28,7 +31,6 @@ def configure():
     )
     # Keep the handle alive so delayed GI/ctypes imports use the bundled DLLs.
     dlls = os.add_dll_directory(str(PREFIX / "bin"))
-    sys.path.insert(0, str(APP))
     if sys.stderr is None:
         sys.stdout = sys.stderr = (home / "runtime" / "inkpad.log").open("a", encoding="utf-8", buffering=1)
     return home, dlls

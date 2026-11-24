@@ -2,7 +2,8 @@ Unicode true
 RequestExecutionLevel user
 Name "Inkpad ${VERSION}"
 OutFile "${SETUP}"
-InstallDir "D:\Inkpad"
+InstallDir "$LOCALAPPDATA\Programs\Inkpad"
+InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\InkpadGNOME" "InstallLocation"
 Icon "${ICON}"
 UninstallIcon "${ICON}"
 SetCompressor zlib
@@ -43,13 +44,8 @@ Function .onInit
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/NOREG" $1
-  IfErrors normal
+  IfErrors +2
   StrCpy $registerApp 0
-  Return
-normal:
-  ReadRegStr $1 HKCU "${PRODUCTKEY}" "InstallLocation"
-  StrCmp $1 "" +2
-  StrCpy $INSTDIR "$1"
 FunctionEnd
 
 Section "Inkpad"
@@ -93,6 +89,11 @@ accept:
   Quit
 linksReady:
   StrCmp $registerApp 0 done
+  ReadRegStr $1 HKCU "${PRODUCTKEY}" "InstallLocation"
+  ${If} $1 != ""
+  ${AndIf} ${FileExists} "$1\InkpadData\*.*"
+    WriteRegStr HKCU "${PRODUCTKEY}" "LegacyDataDir" "$1\InkpadData"
+  ${EndIf}
   WriteRegStr HKCU "${PRODUCTKEY}" "DisplayName" "Inkpad"
   WriteRegStr HKCU "${PRODUCTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${PRODUCTKEY}" "InstallLocation" "$INSTDIR"

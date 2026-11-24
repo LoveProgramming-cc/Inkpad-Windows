@@ -2,7 +2,6 @@ param([string]$WorkDir = (Join-Path $PSScriptRoot '..\..\.windows-build'),
       [string]$Revision = 'pinned')
 $ErrorActionPreference = 'Stop'
 $WorkDir = [IO.Path]::GetFullPath($WorkDir)
-if ([IO.Path]::GetPathRoot($WorkDir) -eq 'C:\') { throw 'Choose a data drive with -WorkDir D:\InkpadBuild' }
 $cache = Join-Path $WorkDir 'cache'
 $temp = Join-Path $WorkDir 'tmp'
 New-Item -ItemType Directory -Force -Path $cache,$temp | Out-Null

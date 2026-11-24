@@ -99,6 +99,11 @@ def stage_app(upstream, payload, env):
             text = text.replace("import time\n","import time\nfrom .windows_platform import strftime\n",1)
             if "from .windows_platform import strftime" not in text:raise ValueError(stem)
             text = text.replace("time.strftime(", "strftime(")
+        if stem == "library":
+            original = "os.path.join(home_override(), 'library')"
+            if text.count(original) != 1:
+                raise ValueError("Review the upstream library directory selection before packaging")
+            text = text.replace(original, "os.environ['INKPAD_WINDOWS_DEFAULT_LIBRARY']")
         if stem == "window":
             old = """        self.toast(tr('请在浏览器中登录 Google 并授权'))
 
@@ -115,6 +120,7 @@ def stage_app(upstream, payload, env):
                 text = text.replace(before, after)
         path.write_text(text,encoding="utf-8")
     shutil.copyfile(SOURCE/"start.py",app/"start.py")
+    shutil.copyfile(SOURCE/"profile_paths.py",app/"profile_paths.py")
     shutil.copyfile(upstream/"LICENSE",payload/"LICENSE")
     shutil.copyfile(upstream/"THIRD-PARTY-NOTICES.md",payload/"THIRD-PARTY-NOTICES.md")
     shutil.copyfile(SOURCE/"README.md",payload/"README.md")

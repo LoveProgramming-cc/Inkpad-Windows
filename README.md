@@ -2,7 +2,9 @@
 
 Inkpad 的 Windows 10 x64 发行版，使用原版 GTK 4 和 libadwaita 界面。下载页提供安装包、便携 ZIP 和 SHA-256 校验文件。[下载最新版本](https://github.com/LoveProgramming-cc/Inkpad-Windows/releases/latest)
 
-首次安装默认使用 `D:\Inkpad`。安装器在当前用户的桌面和开始菜单中各创建一个 **Inkpad** 快捷方式。覆盖安装会补回缺失的快捷方式，卸载会移除这两个入口并保留旁边的 `InkpadData`。已有旧版时，安装器沿用登记的安装位置。便携版完整解压后双击 `Inkpad.exe`。Windows 包未进行公开代码签名。
+首次安装默认使用 `%LOCALAPPDATA%\Programs\Inkpad`，通常在 C 盘。桌面和开始菜单各有一个 **Inkpad** 快捷方式。新用户的笔记保存在 Windows 的 **文档\Inkpad** 中，包括已通过 OneDrive 或系统设置重定向的文档目录。可在应用设置里更改文稿库。设置、登录状态和运行缓存放在 `%LOCALAPPDATA%\Inkpad`。
+
+覆盖安装沿用已选安装位置。首次升级会沿用旧设置和已有笔记的位置。卸载移除程序与快捷方式，保留文稿库和个人设置。便携 ZIP 完整解压后双击 `Inkpad.exe`；带有旧版 `InkpadData` 的便携副本继续使用原数据。Windows 包未进行公开代码签名。
 
 ## 本地一键打包
 
