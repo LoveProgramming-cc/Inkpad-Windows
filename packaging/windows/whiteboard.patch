@@ -44,7 +44,22 @@
                  cr.set_operator(cairo.OPERATOR_MULTIPLY)
              cr.set_source_rgba(*self.color, HL_ALPHA)
          else:
-@@ -503,6 +522,11 @@
+@@ -224,8 +243,13 @@
+                       [_rot_pt(k, w, h, x, y) + (p,) for x, y, p in self.pts], self.sens, self.dash)
+ 
+     def to_json(self, ctx):
++        packed = getattr(self, '_packed', None)
++        if packed is None:
++            packed = pack_points(self.pts)
++            if isinstance(self.pts, tuple):  # only detached, immutable stroke views
++                self._packed = packed
+         d = {'k': 's', 't': self.tool, 'c': list(self.color), 'w': self.width, 'ps': self.sens, 'd': self.dash,
+-             'q': pack_points(self.pts)}
++             'q': packed}
+         if self.open:
+             d['o'] = True
+         return d
+@@ -503,6 +527,11 @@
      box = None
      for it in page.items:
          box = union(box, it.bbox)
@@ -56,7 +71,7 @@
      if box is None:
          return page.w / 2 - 400, page.h / 2 - 300, page.w / 2 + 400, page.h / 2 + 300
      # Pad, and keep a sensible minimum size and shape.
-@@ -746,7 +770,7 @@
+@@ -746,7 +775,7 @@
  def ink_on(page):
      """Tell the items which kind of paper they are about to be drawn on."""
      r, g, b = page.color[:3]
@@ -65,7 +80,7 @@
  
  
  def render_page(cr, page, printing=False, paper=True, ink=True):
-@@ -768,7 +792,7 @@
+@@ -768,7 +797,7 @@
          return
      ink_on(page)
      if not paper:
@@ -74,7 +89,7 @@
      for it in page.items:
          it.draw(cr)
  
-@@ -1063,8 +1087,9 @@
+@@ -1063,8 +1092,9 @@
  
      @staticmethod
      def _swap(seq, out, into):
@@ -86,18 +101,38 @@
          for index, obj in sorted(into, key=lambda pair: pair[0]):
              seq.insert(min(index, len(seq)), obj)
  
-@@ -1335,6 +1360,8 @@
+@@ -1217,7 +1247,14 @@
+                     items.append(data)
+                 # Tombstones are only needed until every device has seen the removal; cap them.
+                 gone = sorted(page.gone)[-GONE_LIMIT:]
+-                page._blob = (page.rev, json.dumps({'items': items, 'gone': gone}, separators=(',', ':')))
++                if page.board and len(items) >= 512:
++                    # Encode in bounded batches so input can run between encoder calls.
++                    chunks = [json.dumps(items[i:i+128], separators=(',', ':'))[1:-1]
++                              for i in range(0, len(items), 128)]
++                    blob = '{"items":[' + ','.join(chunks) + '],"gone":' + json.dumps(gone, separators=(',', ':')) + '}'
++                else:
++                    blob = json.dumps({'items': items, 'gone': gone}, separators=(',', ':'))
++                page._blob = (page.rev, blob)
+             blobs[page.id] = page._blob[1]
+         meta = {'format': 'inkpad', 'version': 3, 'pages': pages, 'id': self.id,
+                 'gone': sorted(self.gone_pages)[-GONE_LIMIT:]}
+@@ -1335,6 +1372,8 @@
              for k, data in enumerate(content['items']):
                  item = _KINDS[data['k']].from_json(data, ctx)
                  item.id = data.get('id') or _digest('%s/%d/%s' % (page.id, k, json.dumps(data, sort_keys=True)))
 +                if page.board and len(content['items']) >= 512 and item.kind == 's':
-+                    item.save_view()
++                    item.save_view()._packed = data.get('q')
                  page.items.append(item)
              page.gone = set(content.get('gone', []))
              page.mt, page._sign = d.get('mt', 0.0), _page_sign(page)
 --- a/minimap.py
 +++ b/minimap.py
-@@ -4,9 +4,9 @@
+@@ -1,13 +1,14 @@
+ """The whiteboard navigator: a small map of where the board is written on, with the
+ part on screen marked, the zoom level, and a button that brings all of it into view."""
++import cairo
+ from gi.repository import GLib, Graphene, Gsk, Gtk
  
  from .i18n import tr
  from . import icons
@@ -106,10 +141,12 @@
 +from .board_performance import BoardOverview
  from .icons import Icon
 -from .model import page_box
- from .render import rgba
+-from .render import rgba
++from .render import rgba, texture_from_surface
  
  MAP_W, MAP_H = 216, 150
-@@ -18,9 +18,7 @@
+ _VIEW_FILL = rgba(0.21, 0.52, 0.89, 0.22)
+@@ -18,9 +19,8 @@
      def __init__(self, canvas):
          super().__init__(width_request=MAP_W, height_request=MAP_H, overflow=Gtk.Overflow.HIDDEN)
          self.canvas = canvas
@@ -117,10 +154,11 @@
 -        self.cell = 1.0        # their size in page points
 -        self.box = None        # the page area the cells cover
 +        self.overview = BoardOverview()
++        self._ink_key = self._ink_layer = None
          self._fit = None       # (region x0, region y0, scale, offset x, offset y) of the last frame
          drag = Gtk.GestureDrag()
          drag.connect('drag-begin', lambda g, x, y: self._go(x, y))
-@@ -37,21 +35,7 @@
+@@ -37,21 +37,8 @@
          if canvas.doc is None:
              return
          page = canvas.doc.pages[canvas.current_page_index()]
@@ -140,12 +178,16 @@
 -                        cells.add((int((p[0] - x0) / cell), int((p[1] - y0) / cell)))
 -        self.cell, self.cells = cell, cells
 +        self.overview.refresh(page)
++        self._ink_key = None
          self.queue_draw()
  
      def do_snapshot(self, snap):
-@@ -61,22 +45,23 @@
+@@ -60,23 +47,37 @@
+         if view is None:
              return
          w, h = self.get_width(), self.get_height()
++        if w <= 0 or h <= 0:
++            return
          # The map covers the content and wherever the view currently is.
 -        rx0, ry0, rx1, ry1 = union(self.box, view) if self.box else view
 +        rx0, ry0, rx1, ry1 = union(self.overview.box, view) if self.overview.box else view
@@ -159,22 +201,34 @@
 +        if self.overview.cells:
              # In the panel's own text colour, so the blocks show in light and dark themes alike.
              ink = self.get_color()
-             ink.alpha = 0.55
+-            ink.alpha = 0.55
 -            bx, by = self.box[0], self.box[1]
 -            side = max(self.cell * s + 0.6, 2.0)   # a little overlap, so neighbours read as one block
 -            for cx, cy in self.cells:
 -                snap.append_color(ink, Graphene.Rect().init(ox + (bx + cx * self.cell - rx0) * s,
 -                                                            oy + (by + cy * self.cell - ry0) * s, side, side))
-+            bx, by = self.overview.origin
-+            cell = self.overview.cell
-+            side = max(cell * s + 0.6, 2.0)   # a little overlap, so neighbours read as one block
-+            for cx, cy in self.overview.cells:
-+                snap.append_color(ink, Graphene.Rect().init(ox + (bx + cx * cell - rx0) * s,
-+                                                            oy + (by + cy * cell - ry0) * s, side, side))
++            # The ink layer changes independently of the viewport indicator.
++            dev = self.get_scale_factor()
++            key = (self.overview, w, h, dev, self._fit, ink.red, ink.green, ink.blue)
++            if self._ink_key != key:
++                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * dev, h * dev)
++                cr = cairo.Context(surface)
++                cr.scale(dev, dev)
++                cr.set_source_rgba(ink.red, ink.green, ink.blue, 0.55)
++                bx, by = self.overview.origin
++                cell = self.overview.cell
++                side = max(cell * s + 0.6, 2.0)
++                for cx, cy in self.overview.cells:
++                    cr.rectangle(ox + (bx + cx * cell - rx0) * s,
++                                 oy + (by + cy * cell - ry0) * s, side, side)
++                    cr.fill()
++                self._ink_layer = texture_from_surface(surface)
++                self._ink_key = key
++            snap.append_texture(self._ink_layer, Graphene.Rect().init(0, 0, w, h))
          rect = Graphene.Rect().init(ox + (view[0] - rx0) * s, oy + (view[1] - ry0) * s,
                                      (view[2] - view[0]) * s, (view[3] - view[1]) * s)
          snap.append_color(_VIEW_FILL, rect)
-@@ -119,8 +104,9 @@
+@@ -119,8 +120,9 @@
              self.zoom.set_label('%d%%' % round(self.canvas.zoom * 100))
              self.map.queue_draw()
  
@@ -185,7 +239,7 @@
          if self.get_visible() and not self._timer:
              self._timer = GLib.timeout_add(350, self._render)
  
-@@ -130,6 +116,7 @@
+@@ -130,6 +132,7 @@
          return False
  
      def show_for(self, board):
@@ -203,7 +257,15 @@
  from .model import Changed, Document, Image, Page, Stroke, export_pdf, export_png, find_text, notebook_id, page_surface
  from .prefs import PrefsDialog, apply_theme
  from .render import texture_from_surface
-@@ -681,7 +682,7 @@
+@@ -95,6 +96,7 @@
+         self.canvas.on_scribble = lambda n: self.st.get('scribble_toast', True) and self.toast(tr('已擦除 %d 项') % n, tr('撤销'), self._undo)
+         self.canvas.on_pull_add = self._pull_add
+ 
++        self._quiet_pending = None
+         self._sync_busy = False
+         self._sync_error = None
+         self._sync_next = None    # a sync asked for while one was running: (quiet, only the open notebook?)
+@@ -681,7 +683,7 @@
              c = self.canvas
              pts = [(20 + 240 * t, 22 + 7 * math.sin(t * 2 * math.pi), 0.6) for t in (i / 40 for i in range(41))]
              item = Stroke('hl', c.hl_color, w, pts) if hl else Stroke('ball', c.pen_color, w, pts)
@@ -212,7 +274,7 @@
              item.draw(cr)
              preview.set_texture(texture_from_surface(surface))
  
-@@ -1354,7 +1355,7 @@
+@@ -1354,7 +1356,7 @@
  
      def _doc_event(self, kind, *args):
          # Every kind of change counts: erasing, for one, only announces a new state.
@@ -221,7 +283,7 @@
          if kind == 'state':
              self._update_title()
              self.undo_btn.set_sensitive(bool(self.doc.undo_stack))
-@@ -1395,11 +1396,11 @@
+@@ -1395,11 +1397,11 @@
          self._relocate(doc)
          if not self._absorb(doc):
              return False
@@ -235,7 +297,7 @@
              except Exception as exc:
                  result, error = None, exc
              GLib.idle_add(done, result, error)
-@@ -1418,8 +1419,8 @@
+@@ -1418,8 +1420,8 @@
              else:
                  if latest and doc.path == path:
                      doc.sign = result
@@ -246,6 +308,32 @@
              return False
  
          thread = self._save_thread = threading.Thread(target=work, daemon=True)
+@@ -1618,6 +1620,25 @@
+             # Not forgotten: it runs when this one is over. The whole library outranks one notebook.
+             was = self._sync_next
+             self._sync_next = (quiet and (was is None or was[0]), only and (was is None or was[1]))
++            return
++        if quiet and self.in_editor() and self.doc is not None and self.doc.path and (self.canvas._op is not None
++                or self._save_thread is not None or self.doc.modified):
++            # The editor's autosave owns this revision. A periodic sync must not join
++            # its worker or force a synchronous save between strokes.
++            if self.doc.modified and not self._save_timer and self._save_thread is None:
++                self._schedule_save()
++            if self._quiet_pending is None:
++                self._quiet_pending = only
++
++                def retry():
++                    scope, self._quiet_pending = self._quiet_pending, None
++                    if self.get_application() is not None:
++                        self.sync_now(True, scope)
++                    return False
++
++                GLib.timeout_add(1500, retry)
++            else:
++                self._quiet_pending = self._quiet_pending and only
+             return
+         only = only and self.in_editor() and self.doc is not None and bool(self.doc.path)
+         began = time.monotonic()
 --- a/sidebar.py
 +++ b/sidebar.py
 @@ -1,10 +1,12 @@
@@ -315,3 +403,68 @@
  
      def _compose(self, page, surface, paper):
          view = self._views.get(page)
+--- a/canvas.py
++++ b/canvas.py
+@@ -14,6 +14,7 @@
+ import cairo
+ from gi.repository import Adw, Gdk, GLib, GObject, Graphene, Gsk, Gtk, Pango
+ 
++from .board_tiles import BoardTiles
+ from .i18n import tr
+ from . import geom
+ from .geom import intersects, union
+@@ -129,6 +130,7 @@
+         self._dev = 1.0
+         self._tops = []
+         self._cw = self._ch = 0.0
++        self._board_tiles = None
+         self._cache = {}
+         self._pending = {}
+         self._bgs = collections.OrderedDict()   # rendered PDF backgrounds, most recently used last
+@@ -271,6 +273,7 @@
+             self.doc.listeners.remove(self._doc_event)
+         self.doc = doc
+         doc.listeners.append(self._doc_event)
++        self._board_tiles = None
+         self._cache.clear()
+         self._pending.clear()
+         self._bgs.clear()
+@@ -1636,6 +1639,14 @@
+         return strips
+ 
+     def _doc_event(self, kind, *args):
++        tiles = self._board_tiles
++        if tiles is not None:
++            if kind == 'pages':
++                self._board_tiles = None
++            elif kind == 'added' and args[0] is tiles.page:
++                tiles.added(args[1], self._hidden)
++            elif kind == 'dirty' and args[0] is tiles.page:
++                tiles.dirty(args[1])
+         if kind == 'added':
+             page, items = args
+             entry = self._cache.get(page)
+@@ -1690,7 +1701,13 @@
+                 rect = _rect(x, y, w, h)
+                 snap.append_outset_shadow(outline.init_from_rect(rect, 0), _SHADOW, 0, 2, 0, 10)
+                 snap.append_color(_WHITE if page.pdf is not None else rgba(*page.color), rect)
+-            entry = self._ensure(page, i)
++            if board and page.pdf is None:
++                if self._board_tiles is None or self._board_tiles.page is not page:
++                    self._board_tiles = BoardTiles(page)
++                self._board_tiles.snapshot(self, snap, i)
++                entry = None
++            else:
++                entry = self._ensure(page, i)
+             if entry is not None:
+                 # Only the strips inside the viewport are uploaded and drawn.
+                 k = h / page.h / entry.sy
+@@ -2377,6 +2394,8 @@
+         self.queue_draw()
+ 
+     def _repaint_page(self, page, rect):
++        if self._board_tiles is not None and self._board_tiles.page is page:
++            self._board_tiles.dirty(rect)
+         entry = self._cache.get(page)
+         if entry is not None:
+             self._repaint(entry, page, rect)

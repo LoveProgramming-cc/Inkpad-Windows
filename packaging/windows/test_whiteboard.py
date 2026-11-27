@@ -107,3 +107,99 @@ assert len(reopened.pages[0].items) == count + 20
 assert reopened.snapshot()['pages'] == doc.snapshot()['pages']
 assert reopened.snapshot()['images'] == [png.getvalue()]
 print("Verified whiteboard drawing during autosave, overview updates, undo/redo and reopening")
+
+# Visit negative coordinates, pan away and back, edit across a tile boundary,
+# then compare the actual cached pixels against a complete fresh rendering.
+from inkpad.board_tiles import TILE, ItemIndex
+from inkpad.geom import intersects
+from inkpad import gdrive
+
+board = model.Document({"board": True, "paper": "grid"})
+sheet, = board.pages
+board.add_items(sheet, [pen(-8, 120), pen(250, 120), pen(260, 270)])
+canvas.set_document(board)
+canvas.center_at(0, 250, 180)
+
+def frame():
+    canvas.do_snapshot(Gtk.Snapshot())
+
+def check_tile(key):
+    tiles = canvas._board_tiles
+    tile = tiles.tiles[key]
+    sx, sy = tiles.scale[0] / sheet.w, tiles.scale[1] / sheet.h
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, TILE, TILE)
+    cr = cairo.Context(surface)
+    cr.translate(-key[0] * TILE, -key[1] * TILE)
+    cr.scale(sx, sy)
+    model.draw_paper(cr, sheet, tile.box)
+    model.ink_on(sheet)
+    for item in sheet.items:
+        if not (canvas._hidden and id(item) in canvas._hidden):
+            item.draw(cr)
+    surface.flush()
+    tile.surface.flush()
+    assert bytes(surface.get_data()) == bytes(tile.surface.get_data())
+
+frame()
+key = (0, 0)
+check_tile(key)
+retained = canvas._board_tiles.tiles[key].texture
+canvas.center_at(0, 900, 180)
+frame()
+canvas.center_at(0, 250, 180)
+frame()
+assert canvas._board_tiles.tiles[key].texture is retained
+boundary = pen(246, 110)
+board.add_items(sheet, [boundary])
+frame()
+for k in [(0, 0), (1, 0), (-1, 0)]:
+    check_tile(k)
+board.undo()
+frame()
+check_tile(key)
+board.redo()
+frame()
+check_tile(key)
+canvas._hidden = {id(boundary)}
+canvas._repaint_page(sheet, boundary.bbox)
+frame()
+check_tile(key)
+canvas._hidden = None
+canvas._repaint_page(sheet, boundary.bbox)
+frame()
+check_tile(key)
+before = list(sheet.items)
+sheet.items = [s for s in before if s is not boundary]
+canvas._repaint_page(sheet, boundary.bbox)
+board.push_diff(sheet, before)
+frame()
+check_tile(key)
+canvas._render_zoom = canvas.zoom = 1.25
+canvas.center_at(0, 250, 180)
+frame()
+check_tile(key)
+
+# Bound spatial indexing for oversized and negative-coordinate objects,
+# and retain the document's paint order regardless of bucket order.
+large = model.Shape('line', -40000, -40000, 40000, 40000, (1,0,0), 3)
+objects = [pen(-300, -250), large, pen(-20, 0)]
+index = ItemIndex(objects)
+for box in [(-300,-251,10,10), (-1,-1,1,1), large.bbox]:
+    assert [i for i in index.query(box) if intersects(i.bbox, box)] == [
+        i for i in objects if intersects(i.bbox, box)]
+
+# Quiet sync requests coalesce and yield to both input and an unfinished save.
+# No credentials or network are needed to exercise the scheduling path.
+from unittest.mock import Mock
+request = Mock()
+sync_state = SimpleNamespace(_sync_busy=False, _quiet_pending=None, in_editor=lambda: True,
+                             doc=doc, canvas=canvas, _save_thread=object(), _save_timer=0,
+                             get_application=lambda: True, sync_now=request)
+with patch.object(gdrive, 'connected', return_value=True), patch.object(GLib, 'timeout_add') as later:
+    Window.sync_now(sync_state, True, True)
+    Window.sync_now(sync_state, True, False)
+    assert later.call_count == 1
+    retry = later.call_args.args[1]
+    assert retry() is False and sync_state._quiet_pending is None
+    request.assert_called_once_with(True, False)
+print("Verified pan reuse, layered tile pixels, edits, zoom, and nonblocking sync scheduling")

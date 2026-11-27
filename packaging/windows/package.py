@@ -128,6 +128,7 @@ def stage_app(upstream, payload, env):
     source = upstream / "inkpad"
     shutil.copytree(source,app/"inkpad",ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     patch_whiteboard(app / "inkpad")
+    shutil.copyfile(SOURCE/"board_tiles.py", app/"inkpad/board_tiles.py")
     shutil.copyfile(SOURCE/"board_performance.py", app/"inkpad/board_performance.py")
     shutil.copyfile(SOURCE/"windows_platform.py",app/"inkpad/windows_platform.py")
     shutil.copyfile(SOURCE/"windows_drive_login.py",app/"inkpad/windows_drive_login.py")
