@@ -115,6 +115,8 @@ def main():
          Path(__file__).with_name("smoke.py"),install/"app",note])
     run([install/"runtime/bin/python3.14.exe","-I","-B","-X","utf8",
          Path(__file__).with_name("test_drive_login.py"),install/"app"])
+    run([install/"runtime/bin/python3.14.exe","-I","-B","-X","utf8",
+         Path(__file__).with_name("test_whiteboard.py"),install/"app"])
     saved = note.read_bytes()
     links[0].unlink()
     run(install_command)

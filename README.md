@@ -33,3 +33,5 @@ Inkpad 的 Windows 10 x64 发行版，使用原版 GTK 4 和 libadwaita 界面�
 ## Windows 适配
 
 打包器从 Inkpad GNOME 项目只读下载源码。对当前基线，打包时在副本里的 `ptext.py` 和 `pdf.py` 接入 Windows DLL 名称解析，在 `library.py`、`prefs.py` 和 `window.py` 接入 Windows 日期格式。新增的启动入口设置包内运行库、字体与数据目录。两个包内 Python 主程序带 UTF-8 进程清单，用于中文安装路径。兼容代码、工具链清单和安装器脚本均在本仓库的 `packaging/windows` 下。[上游源码](https://github.com/LoveProgramming-cc/Inkpad-gnome)
+
+大白板书写时，小地图按新增笔迹更新。自动保存会在界面线程固定当前版本，再在后台生成文件和封面。侧栏打开时，大白板缩略图也在后台生成。相关改动由打包器应用到源码副本；上游改动与补丁不匹配时，打包会提示人工复核。回归测试会在自动保存期间继续书写，并重新打开文稿核对内容。

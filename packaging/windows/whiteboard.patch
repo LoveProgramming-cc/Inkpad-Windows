@@ -1,0 +1,317 @@
+--- a/model.py
++++ b/model.py
+@@ -116,6 +116,25 @@
+         if self.pts:
+             self.update_bbox()
+ 
++    _frozen = None
++
++    def __setattr__(self, name, value):
++        if self._frozen is not None:
++            self.__dict__.pop('_frozen', None)
++        object.__setattr__(self, name, value)
++
++    def save_view(self):
++        # The editor finalises in-place point edits with update_bbox(). Attribute
++        # changes (including tape state and IDs) invalidate this detached copy.
++        if self._frozen is None:
++            item_id(self)
++            frozen = object.__new__(Stroke)
++            frozen.__dict__ = vars(self).copy()
++            frozen.pts = tuple(self.pts)
++            frozen.color = tuple(self.color)
++            self.__dict__['_frozen'] = frozen
++        return self._frozen
++
+     def w_at(self, p):
+         if self.tool == 'fountain':
+             return self.width * max(0.15, 1 + self.sens * 1.2 * (p - 0.5))
+@@ -129,7 +148,7 @@
+     def update_bbox(self):
+         self.bbox = geom.bbox_of(self.pts, self.pad())
+ 
+-    on_dark = False   # set by ink_on() for the page about to be drawn
++    paper_state = threading.local()   # cover and canvas can render different pages concurrently
+ 
+     def draw(self, cr):
+         if not self.pts:
+@@ -148,7 +167,7 @@
+             cr.save()
+             # Multiplying darkens, which is what a marker does on light paper but
+             # would make it invisible on a dark one.
+-            if not Stroke.on_dark:
++            if not getattr(Stroke.paper_state, 'dark', False):
+                 cr.set_operator(cairo.OPERATOR_MULTIPLY)
+             cr.set_source_rgba(*self.color, HL_ALPHA)
+         else:
+@@ -503,6 +522,11 @@
+     box = None
+     for it in page.items:
+         box = union(box, it.bbox)
++    return board_box(page, box)
++
++
++def board_box(page, box):
++    """Pad the accumulated whiteboard bounds for the overview, cover and export."""
+     if box is None:
+         return page.w / 2 - 400, page.h / 2 - 300, page.w / 2 + 400, page.h / 2 + 300
+     # Pad, and keep a sensible minimum size and shape.
+@@ -746,7 +770,7 @@
+ def ink_on(page):
+     """Tell the items which kind of paper they are about to be drawn on."""
+     r, g, b = page.color[:3]
+-    Stroke.on_dark = page.pdf is None and 0.299 * r + 0.587 * g + 0.114 * b < 0.45
++    Stroke.paper_state.dark = page.pdf is None and 0.299 * r + 0.587 * g + 0.114 * b < 0.45
+ 
+ 
+ def render_page(cr, page, printing=False, paper=True, ink=True):
+@@ -768,7 +792,7 @@
+         return
+     ink_on(page)
+     if not paper:
+-        Stroke.on_dark = True   # nothing underneath to multiply with
++        Stroke.paper_state.dark = True   # nothing underneath to multiply with
+     for it in page.items:
+         it.draw(cr)
+ 
+@@ -1063,8 +1087,9 @@
+ 
+     @staticmethod
+     def _swap(seq, out, into):
+-        gone = {id(obj) for _, obj in out}
+-        seq[:] = [obj for obj in seq if id(obj) not in gone]
++        if out:
++            gone = {id(obj) for _, obj in out}
++            seq[:] = [obj for obj in seq if id(obj) not in gone]
+         for index, obj in sorted(into, key=lambda pair: pair[0]):
+             seq.insert(min(index, len(seq)), obj)
+ 
+@@ -1335,6 +1360,8 @@
+             for k, data in enumerate(content['items']):
+                 item = _KINDS[data['k']].from_json(data, ctx)
+                 item.id = data.get('id') or _digest('%s/%d/%s' % (page.id, k, json.dumps(data, sort_keys=True)))
++                if page.board and len(content['items']) >= 512 and item.kind == 's':
++                    item.save_view()
+                 page.items.append(item)
+             page.gone = set(content.get('gone', []))
+             page.mt, page._sign = d.get('mt', 0.0), _page_sign(page)
+--- a/minimap.py
++++ b/minimap.py
+@@ -4,9 +4,9 @@
+ 
+ from .i18n import tr
+ from . import icons
+-from .geom import densify, union
++from .geom import union
++from .board_performance import BoardOverview
+ from .icons import Icon
+-from .model import page_box
+ from .render import rgba
+ 
+ MAP_W, MAP_H = 216, 150
+@@ -18,9 +18,7 @@
+     def __init__(self, canvas):
+         super().__init__(width_request=MAP_W, height_request=MAP_H, overflow=Gtk.Overflow.HIDDEN)
+         self.canvas = canvas
+-        self.cells = set()     # occupied grid cells of the board's content
+-        self.cell = 1.0        # their size in page points
+-        self.box = None        # the page area the cells cover
++        self.overview = BoardOverview()
+         self._fit = None       # (region x0, region y0, scale, offset x, offset y) of the last frame
+         drag = Gtk.GestureDrag()
+         drag.connect('drag-begin', lambda g, x, y: self._go(x, y))
+@@ -37,21 +35,7 @@
+         if canvas.doc is None:
+             return
+         page = canvas.doc.pages[canvas.current_page_index()]
+-        self.box = x0, y0, x1, y1 = page_box(page)
+-        cell = max((x1 - x0) / 64, (y1 - y0) / 44, 1e-6)
+-        cells = set()
+-        for it in page.items:
+-            if it.kind in ('i', 't'):
+-                bx0, by0, bx1, by1 = it.bbox
+-                for cx in range(int((bx0 - x0) / cell), int((bx1 - x0) / cell) + 1):
+-                    for cy in range(int((by0 - y0) / cell), int((by1 - y0) / cell) + 1):
+-                        cells.add((cx, cy))
+-            else:
+-                line = it.polyline()
+-                if line:
+-                    for p in (densify(line, cell * 0.45) if len(line) > 1 else line):
+-                        cells.add((int((p[0] - x0) / cell), int((p[1] - y0) / cell)))
+-        self.cell, self.cells = cell, cells
++        self.overview.refresh(page)
+         self.queue_draw()
+ 
+     def do_snapshot(self, snap):
+@@ -61,22 +45,23 @@
+             return
+         w, h = self.get_width(), self.get_height()
+         # The map covers the content and wherever the view currently is.
+-        rx0, ry0, rx1, ry1 = union(self.box, view) if self.box else view
++        rx0, ry0, rx1, ry1 = union(self.overview.box, view) if self.overview.box else view
+         pad = 0.04 * max(rx1 - rx0, ry1 - ry0)
+         rx0, ry0, rx1, ry1 = rx0 - pad, ry0 - pad, rx1 + pad, ry1 + pad
+         s = min(w / (rx1 - rx0), h / (ry1 - ry0))
+         ox, oy = (w - (rx1 - rx0) * s) / 2, (h - (ry1 - ry0) * s) / 2
+         self._fit = (rx0, ry0, s, ox, oy)
+ 
+-        if self.cells:
++        if self.overview.cells:
+             # In the panel's own text colour, so the blocks show in light and dark themes alike.
+             ink = self.get_color()
+             ink.alpha = 0.55
+-            bx, by = self.box[0], self.box[1]
+-            side = max(self.cell * s + 0.6, 2.0)   # a little overlap, so neighbours read as one block
+-            for cx, cy in self.cells:
+-                snap.append_color(ink, Graphene.Rect().init(ox + (bx + cx * self.cell - rx0) * s,
+-                                                            oy + (by + cy * self.cell - ry0) * s, side, side))
++            bx, by = self.overview.origin
++            cell = self.overview.cell
++            side = max(cell * s + 0.6, 2.0)   # a little overlap, so neighbours read as one block
++            for cx, cy in self.overview.cells:
++                snap.append_color(ink, Graphene.Rect().init(ox + (bx + cx * cell - rx0) * s,
++                                                            oy + (by + cy * cell - ry0) * s, side, side))
+         rect = Graphene.Rect().init(ox + (view[0] - rx0) * s, oy + (view[1] - ry0) * s,
+                                     (view[2] - view[0]) * s, (view[3] - view[1]) * s)
+         snap.append_color(_VIEW_FILL, rect)
+@@ -119,8 +104,9 @@
+             self.zoom.set_label('%d%%' % round(self.canvas.zoom * 100))
+             self.map.queue_draw()
+ 
+-    def content_changed(self):
++    def content_changed(self, kind, *args):
+         """The board was drawn on: update the picture shortly, not on every stroke point."""
++        self.map.overview.changed(kind, *args)
+         if self.get_visible() and not self._timer:
+             self._timer = GLib.timeout_add(350, self._render)
+ 
+@@ -130,6 +116,7 @@
+         return False
+ 
+     def show_for(self, board):
++        self.map.overview = BoardOverview()
+         self.set_visible(board)
+         if board:
+             self.map.render()
+--- a/window.py
++++ b/window.py
+@@ -16,6 +16,7 @@
+ from .icons import Icon, TextureView
+ from .minimap import Minimap
+ from .library import LibraryView, Store, fitted, menu_popover
++from .board_performance import save_job
+ from .model import Changed, Document, Image, Page, Stroke, export_pdf, export_png, find_text, notebook_id, page_surface
+ from .prefs import PrefsDialog, apply_theme
+ from .render import texture_from_surface
+@@ -681,7 +682,7 @@
+             c = self.canvas
+             pts = [(20 + 240 * t, 22 + 7 * math.sin(t * 2 * math.pi), 0.6) for t in (i / 40 for i in range(41))]
+             item = Stroke('hl', c.hl_color, w, pts) if hl else Stroke('ball', c.pen_color, w, pts)
+-            Stroke.on_dark = True   # plain blending: the preview has no paper underneath
++            Stroke.paper_state.dark = True   # plain blending: the preview has no paper underneath
+             item.draw(cr)
+             preview.set_texture(texture_from_surface(surface))
+ 
+@@ -1354,7 +1355,7 @@
+ 
+     def _doc_event(self, kind, *args):
+         # Every kind of change counts: erasing, for one, only announces a new state.
+-        self.minimap.content_changed()
++        self.minimap.content_changed(kind, *args)
+         if kind == 'state':
+             self._update_title()
+             self.undo_btn.set_sensitive(bool(self.doc.undo_stack))
+@@ -1395,11 +1396,11 @@
+         self._relocate(doc)
+         if not self._absorb(doc):
+             return False
+-        snap, path, sign = doc.snapshot(), doc.path, doc.sign
++        snapshot, path, sign, revision = save_job(doc), doc.path, doc.sign, doc.rev
+ 
+         def work():
+             try:
+-                result, error = Document.write_snapshot(path, snap, sign), None
++                result, error = Document.write_snapshot(path, snapshot(), sign), None
+             except Exception as exc:
+                 result, error = None, exc
+             GLib.idle_add(done, result, error)
+@@ -1418,8 +1419,8 @@
+             else:
+                 if latest and doc.path == path:
+                     doc.sign = result
+-                if doc.saved_rev < snap['rev']:
+-                    doc.saved_rev = snap['rev']
++                if doc.saved_rev < revision:
++                    doc.saved_rev = revision
+             return False
+ 
+         thread = self._save_thread = threading.Thread(target=work, daemon=True)
+--- a/sidebar.py
++++ b/sidebar.py
+@@ -1,10 +1,12 @@
+ """Editor sidebar: page thumbnails in two columns, outline and bookmarks."""
++import threading
+ import cairo
+ from gi.repository import GLib, Gtk
+ 
+ from .i18n import tr
+ from . import icons
+ from .icons import Icon, TextureView
++from .board_performance import frozen_page, large_board
+ from .model import ink_on, page_surface
+ from .render import texture_from_surface, worker
+ 
+@@ -21,6 +23,7 @@
+         self._marks = {}
+         self._dirty = set()
+         self._timer = 0
++        self._board_busy = False
+ 
+         tabs = Gtk.Box(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=8)
+         tabs.add_css_class('linked')
+@@ -140,7 +143,7 @@
+     # -- thumbnails, rendered lazily while the sidebar is visible -----------
+ 
+     def _schedule(self):
+-        if not self._timer and self._dirty:
++        if not self._timer and self._dirty and not self._board_busy:
+             self._timer = GLib.timeout_add(350, self._flush)
+ 
+     def _flush(self):
+@@ -157,10 +160,36 @@
+             if page.pdf is not None:
+                 worker().submit(3, lambda page=page: page in self._views, page, pw, ph,
+                                 lambda surface, page=page: self._compose(page, surface, False))
++            elif large_board(page):
++                self._board_busy = True
++                self._board_thumbnail(page, view, pw, ph)
++                break
+             else:
+                 view.set_texture(texture_from_surface(page_surface(page, 0, (pw, ph))))
+         self._schedule()
+         return False
++
++    def _board_thumbnail(self, page, view, width, height):
++        frozen = frozen_page(page)
++
++        def done(surface):
++            self._board_busy = False
++            if self._views.get(page) is view:
++                if page.rev != frozen.rev:
++                    self._dirty.add(page)
++                elif surface is not None:
++                    view.set_texture(texture_from_surface(surface))
++            self._schedule()
++            return False
++
++        def render():
++            surface = None
++            try:
++                surface = page_surface(frozen, 0, (width, height))
++            finally:
++                GLib.idle_add(done, surface)
++
++        threading.Thread(target=render, name='inkpad-board-thumbnail', daemon=True).start()
+ 
+     def _compose(self, page, surface, paper):
+         view = self._views.get(page)

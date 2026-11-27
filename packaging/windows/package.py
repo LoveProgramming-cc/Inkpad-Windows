@@ -83,10 +83,52 @@ def stage_runtime(root, env):
     if not list((root/"bin").glob("libpoppler-glib-*.dll")):raise RuntimeError("Missing Poppler GLib")
 
 
+def patch_whiteboard(target):
+    """Apply our reviewed unified diff to the staged app without an external patch tool."""
+    patch = (SOURCE / "whiteboard.patch").read_text(encoding="utf-8").splitlines(True)
+    index = 0
+    while index < len(patch):
+        header = re.fullmatch(r"--- a/([a-z_]+[.]py)\n", patch[index])
+        if not header or patch[index + 1] != "+++ b/" + header[1] + "\n":
+            raise ValueError("Invalid whiteboard patch header")
+        path = target / header[1]
+        lines = path.read_text(encoding="utf-8").splitlines(True)
+        offset = 0
+        index += 2
+        while index < len(patch) and patch[index].startswith("@@"):
+            hunk = re.fullmatch(r"@@ -(\d+),(\d+) [+](\d+),(\d+) @@\n", patch[index])
+            if not hunk:
+                raise ValueError(f"Invalid whiteboard patch hunk for {path.name}")
+            old, new = [], []
+            index += 1
+            while index < len(patch) and not patch[index].startswith(("@@", "--- a/")):
+                line = patch[index]
+                if line[0] in " -":
+                    old.append(line[1:])
+                if line[0] in " +":
+                    new.append(line[1:])
+                index += 1
+            pos = int(hunk[1]) - 1 + offset
+            if (len(old), len(new)) != (int(hunk[2]), int(hunk[4])):
+                raise ValueError(f"Incomplete whiteboard patch in {path.name}")
+            if lines[pos:pos + len(old)] != old:
+                # Upstream may have inserted unrelated lines. Only accept an exact, unique match.
+                matches = [i for i, line in enumerate(lines)
+                           if old and line == old[0] and lines[i:i + len(old)] == old]
+                if len(matches) != 1:
+                    raise ValueError(f"Review whiteboard changes against upstream {path.name}")
+                pos, = matches
+            lines[pos:pos + len(old)] = new
+            offset = pos - (int(hunk[1]) - 1) + len(new) - len(old)
+        path.write_text("".join(lines), encoding="utf-8")
+
+
 def stage_app(upstream, payload, env):
     app = payload / "app"
     source = upstream / "inkpad"
     shutil.copytree(source,app/"inkpad",ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    patch_whiteboard(app / "inkpad")
+    shutil.copyfile(SOURCE/"board_performance.py", app/"inkpad/board_performance.py")
     shutil.copyfile(SOURCE/"windows_platform.py",app/"inkpad/windows_platform.py")
     shutil.copyfile(SOURCE/"windows_drive_login.py",app/"inkpad/windows_drive_login.py")
     for stem in ("ptext","pdf","library","prefs","window"):
